@@ -27,6 +27,7 @@ trait ScLiteral extends ScExpression with PsiLiteral with PsiLanguageInjectionHo
   def getAnnotationOwner(annotationOwnerLookUp: ScLiteral => Option[PsiAnnotationOwner with PsiElement]): Option[PsiAnnotationOwner]
   def isSymbol: Boolean
   def isChar: Boolean
+  def isInteger: Boolean
   def contentRange: TextRange
 }
 

@@ -8,7 +8,6 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.psi._
 import org.jetbrains.plugins.scala.caches.CachesUtil
 import org.jetbrains.plugins.scala.extensions.ElementText
-import org.jetbrains.plugins.scala.lang.lexer.ScalaTokenTypes
 import org.jetbrains.plugins.scala.lang.psi.ScalaPsiUtil.MethodValue
 import org.jetbrains.plugins.scala.lang.psi.api.InferUtil.SafeCheckException
 import org.jetbrains.plugins.scala.lang.psi.api.base.ScLiteral
@@ -39,165 +38,152 @@ import scala.collection.{Seq, Set}
 trait ScExpression extends ScBlockStatement with PsiAnnotationMemberValue with ImplicitParametersOwner
   with ScModificationTrackerOwner with Typeable {
   import org.jetbrains.plugins.scala.lang.psi.api.expr.ScExpression._
+
   /**
-   * This method returns real type, after using implicit conversions.
-   * Second parameter to return is used imports for this conversion.
-   *
-   * @param expectedOption to which type we trying to convert
-   * @param ignoreBaseTypes parameter to avoid value discarding, literal narrowing, widening
-   *                        this parameter is useful for refactorings (introduce variable)
-   */
+    * This method returns real type, after using implicit conversions.
+    * Second parameter to return is used imports for this conversion.
+    *
+    * @param expectedOption  to which type we trying to convert
+    * @param ignoreBaseTypes parameter to avoid value discarding, literal narrowing, widening
+    *                        this parameter is useful for refactorings (introduce variable)
+    */
   @CachedMappedWithRecursionGuard(this, ExpressionTypeResult(Failure("Recursive getTypeAfterImplicitConversion",
     Some(this)), Set.empty, None), ModCount.getBlockModificationCount)
   def getTypeAfterImplicitConversion(checkImplicits: Boolean = true, isShape: Boolean = false,
                                      expectedOption: Option[ScType] = None,
                                      ignoreBaseTypes: Boolean = false,
                                      fromUnderscore: Boolean = false): ExpressionTypeResult = {
+    val expectedOpt = expectedOption.orElse(expectedType(fromUnderscore))
     if (isShape) {
       val tp: ScType = getShape()._1
       def default = ExpressionTypeResult(Success(tp, Some(ScExpression.this)), Set.empty, None)
-      val expectedOpt = expectedOption.orElse(expectedType(fromUnderscore))
       expectedOpt match {
         case Some(expected) if !tp.conforms(expected) =>
           tryConvertToSAM(fromUnderscore, expected, tp).getOrElse(default)
         case _ => default
       }
     }
-    else {
-      val expected: ScType = expectedOption.getOrElse(expectedType(fromUnderscore).orNull)
-      if (expected == null) {
-        ExpressionTypeResult(getTypeWithoutImplicits(ignoreBaseTypes, fromUnderscore), Set.empty, None)
-      } else {
+    else expectedOpt match {
+      case Some(expected) =>
         val tr = getTypeWithoutImplicits(ignoreBaseTypes, fromUnderscore)
         def defaultResult: ExpressionTypeResult = ExpressionTypeResult(tr, Set.empty, None)
         if (!checkImplicits) defaultResult //do not try implicit conversions for shape check
-        else {
-          tr match {
-            //if this result is ok, we do not need to think about implicits
-            case Success(tp, _) if tp.conforms(expected) => defaultResult
-            case Success(tp, _) =>
-              tryConvertToSAM(fromUnderscore, expected, tp) match {
-                case Some(r) => return r
+        else tr match {
+          //if this result is ok, we do not need to think about implicits
+          case Success(tp, _) if tp.conforms(expected) => defaultResult
+          case Success(tp, _) =>
+            tryConvertToSAM(fromUnderscore, expected, tp) match {
+              case Some(r) => return r
+              case _ =>
+            }
+            val scalaVersion = ScExpression.this.scalaLanguageLevelOrDefault
+            if (scalaVersion >= Scala_2_11 && ScalaPsiUtil.isJavaReflectPolymorphicSignature(ScExpression.this)) {
+              return ExpressionTypeResult(Success(expected, Some(ScExpression.this)), Set.empty, None)
+            }
+            if (!ignoreBaseTypes) {
+              checkNumericImplicitConversions(tp, expected) match {
+                case Some(r) => return ExpressionTypeResult(r, Set.empty, None)
                 case _ =>
               }
-
-              val scalaVersion = ScExpression.this.scalaLanguageLevelOrDefault
-              if (scalaVersion >= Scala_2_11 && ScalaPsiUtil.isJavaReflectPolymorphicSignature(ScExpression.this)) {
-                return ExpressionTypeResult(Success(expected, Some(ScExpression.this)), Set.empty, None)
-              }
-
-              if (!ignoreBaseTypes) {
-                checkNumericImplicitConversions(tp, expected) match {
-                  case Some(r) => return ExpressionTypeResult(r, Set.empty, None)
-                  case _ =>
-                }
-              }
-
-              val functionType = FunctionType(expected, Seq(tp))(getProject, getResolveScope)
-              val results = new ImplicitCollector(ScExpression.this, functionType, functionType, None,
-                isImplicitConversion = true, isExtensionConversion = false).collect()
-              if (results.length == 1) {
-                val res = results.head
-                val paramType = InferUtil.extractImplicitParameterType(res)
-                paramType match {
-                  case FunctionType(rt, Seq(param)) =>
-                    ExpressionTypeResult(Success(rt, Some(ScExpression.this)), res.importsUsed, Some(res.getElement))
-                  case _ =>
-                    ScalaPsiManager.instance(getProject).getCachedClass(
-                      "scala.Function1", getResolveScope, ScalaPsiManager.ClassCategory.TYPE
-                    ) match {
-                      case function1: ScTrait =>
-                        ScParameterizedType(ScalaType.designator(function1), function1.typeParameters.map(tp =>
-                          UndefinedType(TypeParameterType(tp), 1))) match {
-                          case funTp: ScParameterizedType =>
-                            val secondArg = funTp.typeArguments(1)
-                            paramType.conforms(funTp, new ScUndefinedSubstitutor())._2.getSubstitutor match {
-                              case Some(subst) =>
-                                val rt = subst.subst(secondArg)
-                                if (rt.isInstanceOf[UndefinedType]) defaultResult
-                                else {
-                                  ExpressionTypeResult(Success(rt, Some(ScExpression.this)), res.importsUsed, Some(res.getElement))
-                                }
-                              case None => defaultResult
-                            }
-                          case _ => defaultResult
-                        }
-                      case _ => defaultResult
-                    }
-                }
-              } else defaultResult
-            case _ => defaultResult
-          }
+            }
+            findImplicitConversions(tp, expected).getOrElse(defaultResult)
+          case _ => defaultResult
         }
-      }
+      case _ => ExpressionTypeResult(getTypeWithoutImplicits(ignoreBaseTypes, fromUnderscore), Set.empty, None)
     }
   }
 
-  private def checkNumericImplicitConversions(tp: ScType, expected: ScType): Option[TypeResult[ScType]] = {
-    //value discarding
-    if (expected.removeAbstracts equiv Unit) return Some(Success(Unit, Some(this)))
-    //numeric literal narrowing
-    val needsNarrowing = ScExpression.this match {
-      case _: ScLiteral => getNode.getFirstChildNode.getElementType == ScalaTokenTypes.tINTEGER
-      case p: ScPrefixExpr => p.operand match {
-        case l: ScLiteral =>
-          l.getNode.getFirstChildNode.getElementType == ScalaTokenTypes.tINTEGER &&
-            Set("+", "-").contains(p.operation.getText)
-        case _ => false
+  private def findImplicitConversions(tp: ScType, expected: ScType): Option[ExpressionTypeResult] = {
+    val functionType = FunctionType(expected, Seq(tp))(getProject, getResolveScope)
+    val results = new ImplicitCollector(ScExpression.this, functionType, functionType, None,
+      isImplicitConversion = true, isExtensionConversion = false).collect()
+    if (results.length == 1) {
+      val res = results.head
+      val paramType = InferUtil.extractImplicitParameterType(res)
+      paramType match {
+        case FunctionType(rt, Seq(param)) =>
+          Some(ExpressionTypeResult(Success(rt, Some(ScExpression.this)), res.importsUsed, Some(res.getElement)))
+        case _ =>
+          ScalaPsiManager.instance(getProject).getCachedClass(
+            "scala.Function1", getResolveScope, ScalaPsiManager.ClassCategory.TYPE
+          ) match {
+            case function1: ScTrait =>
+              ScParameterizedType(ScalaType.designator(function1), function1.typeParameters.map(tp =>
+                UndefinedType(TypeParameterType(tp), 1))) match {
+                case funTp: ScParameterizedType =>
+                  val secondArg = funTp.typeArguments(1)
+                  paramType.conforms(funTp, new ScUndefinedSubstitutor())._2.getSubstitutor match {
+                    case Some(subst) =>
+                      val rt = subst.subst(secondArg)
+                      if (rt.isInstanceOf[UndefinedType]) None
+                      else {
+                        Some(ExpressionTypeResult(Success(rt, Some(ScExpression.this)), res.importsUsed, Some(res.getElement)))
+                      }
+                    case None => None
+                  }
+                case _ => None
+              }
+            case _ => None
+          }
       }
-      case _ => false
-    }
+    } else None
+  }
 
+  private def checkNumericImplicitConversions(tp: ScType, expected: ScType): Option[TypeResult[ScType]] = {
     def checkNarrowing: Option[TypeResult[ScType]] = {
       try {
-        lazy val i = ScExpression.this match {
-          case l: ScLiteral    => l.getValue match {
+        lazy val intValue = this match {
+          case l: ScLiteral => l.getValue match {
             case i: Integer => i.intValue
-            case _          => scala.Int.MaxValue
+            case _ => scala.Int.MaxValue
           }
           case p: ScPrefixExpr =>
             val mult = if (p.operation.getText == "-") -1 else 1
             p.operand match {
               case l: ScLiteral => l.getValue match {
                 case i: Integer => mult * i.intValue
-                case _          => scala.Int.MaxValue
+                case _ => scala.Int.MaxValue
               }
             }
         }
+        def withinBounds(tested: Int, lower: Int, upper: Int): Boolean = tested < upper && tested > lower
+
         expected.removeAbstracts match {
-          case api.Char =>
-            if (i >= scala.Char.MinValue.toInt && i <= scala.Char.MaxValue.toInt) {
-              return Some(Success(Char, Some(ScExpression.this)))
-            }
-          case api.Byte =>
-            if (i >= scala.Byte.MinValue.toInt && i <= scala.Byte.MaxValue.toInt) {
-              return Some(Success(Byte, Some(ScExpression.this)))
-            }
-          case api.Short =>
-            if (i >= scala.Short.MinValue.toInt && i <= scala.Short.MaxValue.toInt) {
-              return Some(Success(Short, Some(ScExpression.this)))
-            }
-          case _           =>
+          case api.Char if withinBounds(intValue, scala.Char.MinValue.toInt, scala.Char.MaxValue.toInt) =>
+            Some(Success(Char, Some(this)))
+          case api.Byte if withinBounds(intValue, scala.Byte.MinValue.toInt, scala.Byte.MaxValue.toInt) =>
+            Some(Success(Byte, Some(this)))
+          case api.Short if withinBounds(intValue, scala.Short.MinValue.toInt, scala.Short.MaxValue.toInt) =>
+            Some(Success(Short, Some(this)))
+          case _ => None
         }
+      } catch {
+        case _: NumberFormatException => None
       }
-      catch {
-        case _: NumberFormatException => //do nothing
-      }
-      None
     }
 
-    val check = if (needsNarrowing) checkNarrowing else None
-    if (check.isDefined) check
-    else {
+    //value discarding
+    if (expected.removeAbstracts equiv Unit) return Some(Success(Unit, Some(this)))
+    //numeric literal narrowing
+    val isInteger = this match {
+      case l: ScLiteral => l.isInteger
+      case p: ScPrefixExpr => p.operand match {
+        case l: ScLiteral => l.isInteger && Set("+", "-").contains(p.operation.getText)
+        case _ => false
+      }
+      case _ => false
+    }
+    val possiblyNarrowed = if (isInteger) checkNarrowing else None
+    possiblyNarrowed.orElse {
       //numeric widening
       def checkWidening(l: ScType, r: ScType): Option[TypeResult[ScType]] = {
         (l, r) match {
-          case (Byte, Short | Int | Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-          case (Short, Int | Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-          case (Char, Byte | Short | Int | Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-          case (Int, Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-          case (Long, Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-          case (Float, Double) => Some(Success(expected, Some(ScExpression.this)))
+          case (Byte, Short | Int | Long | Float | Double) => Some(Success(expected, Some(this)))
+          case (Short, Int | Long | Float | Double) => Some(Success(expected, Some(this)))
+          case (Char, Byte | Short | Int | Long | Float | Double) => Some(Success(expected, Some(this)))
+          case (Int, Long | Float | Double) => Some(Success(expected, Some(this)))
+          case (Long, Float | Double) => Some(Success(expected, Some(this)))
+          case (Float, Double) => Some(Success(expected, Some(this)))
           case _ => None
         }
       }
@@ -404,10 +390,10 @@ trait ScExpression extends ScBlockStatement with PsiAnnotationMemberValue with I
             new Parameter("", None, tpe, false, false, false, index)
         }
         val methType =
-          new ScMethodType(getTypeAfterImplicitConversion(ignoreBaseTypes = ignoreBaseType,
+          ScMethodType(getTypeAfterImplicitConversion(ignoreBaseTypes = ignoreBaseType,
             fromUnderscore = true).tr.getOrAny,
-            params, false)(getProject, getResolveScope)
-        new Success(methType, Some(ScExpression.this))
+            params, isImplicit = false)(getProject, getResolveScope)
+        Success(methType, Some(ScExpression.this))
       }
     }
   }

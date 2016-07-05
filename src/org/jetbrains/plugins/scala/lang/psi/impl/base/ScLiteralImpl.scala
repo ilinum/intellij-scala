@@ -10,8 +10,8 @@ import java.util.Random
 
 import com.intellij.lang.ASTNode
 import com.intellij.lang.injection.InjectedLanguageManager
-import com.intellij.openapi.util.{Pair, TextRange}
 import com.intellij.openapi.util.text.StringUtil
+import com.intellij.openapi.util.{Pair, TextRange}
 import com.intellij.psi._
 import com.intellij.psi.impl.source.tree.LeafElement
 import com.intellij.psi.impl.source.tree.injected.InjectedLanguageUtil
@@ -169,6 +169,8 @@ class ScLiteralImpl(node: ASTNode) extends ScalaPsiElementImpl(node) with ScLite
   override def isSymbol: Boolean = getFirstChild.getNode.getElementType == ScalaTokenTypes.tSYMBOL
 
   override def isChar: Boolean = getFirstChild.getNode.getElementType == ScalaTokenTypes.tCHAR
+
+  override def isInteger: Boolean = getNode.getFirstChildNode.getElementType == ScalaTokenTypes.tINTEGER
 
   override def getReferences: Array[PsiReference] = {
     PsiReferenceService.getService.getContributedReferences(this)
