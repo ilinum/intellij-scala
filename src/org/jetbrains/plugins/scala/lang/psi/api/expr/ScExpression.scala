@@ -86,6 +86,13 @@ trait ScExpression extends ScBlockStatement with PsiAnnotationMemberValue with I
                 return ExpressionTypeResult(Success(expected, Some(ScExpression.this)), Set.empty, None)
               }
 
+              if (!ignoreBaseTypes) {
+                checkNumericImplicitConversions(tp, expected) match {
+                  case Some(r) => return ExpressionTypeResult(r, Set.empty, None)
+                  case _ =>
+                }
+              }
+
               val functionType = FunctionType(expected, Seq(tp))(getProject, getResolveScope)
               val results = new ImplicitCollector(ScExpression.this, functionType, functionType, None,
                 isImplicitConversion = true, isExtensionConversion = false).collect()
@@ -122,6 +129,89 @@ trait ScExpression extends ScBlockStatement with PsiAnnotationMemberValue with I
             case _ => defaultResult
           }
         }
+      }
+    }
+  }
+
+  private def checkNumericImplicitConversions(tp: ScType, expected: ScType): Option[TypeResult[ScType]] = {
+    //value discarding
+    if (expected.removeAbstracts equiv Unit) return Some(Success(Unit, Some(this)))
+    //numeric literal narrowing
+    val needsNarrowing = ScExpression.this match {
+      case _: ScLiteral => getNode.getFirstChildNode.getElementType == ScalaTokenTypes.tINTEGER
+      case p: ScPrefixExpr => p.operand match {
+        case l: ScLiteral =>
+          l.getNode.getFirstChildNode.getElementType == ScalaTokenTypes.tINTEGER &&
+            Set("+", "-").contains(p.operation.getText)
+        case _ => false
+      }
+      case _ => false
+    }
+
+    def checkNarrowing: Option[TypeResult[ScType]] = {
+      try {
+        lazy val i = ScExpression.this match {
+          case l: ScLiteral    => l.getValue match {
+            case i: Integer => i.intValue
+            case _          => scala.Int.MaxValue
+          }
+          case p: ScPrefixExpr =>
+            val mult = if (p.operation.getText == "-") -1 else 1
+            p.operand match {
+              case l: ScLiteral => l.getValue match {
+                case i: Integer => mult * i.intValue
+                case _          => scala.Int.MaxValue
+              }
+            }
+        }
+        expected.removeAbstracts match {
+          case api.Char =>
+            if (i >= scala.Char.MinValue.toInt && i <= scala.Char.MaxValue.toInt) {
+              return Some(Success(Char, Some(ScExpression.this)))
+            }
+          case api.Byte =>
+            if (i >= scala.Byte.MinValue.toInt && i <= scala.Byte.MaxValue.toInt) {
+              return Some(Success(Byte, Some(ScExpression.this)))
+            }
+          case api.Short =>
+            if (i >= scala.Short.MinValue.toInt && i <= scala.Short.MaxValue.toInt) {
+              return Some(Success(Short, Some(ScExpression.this)))
+            }
+          case _           =>
+        }
+      }
+      catch {
+        case _: NumberFormatException => //do nothing
+      }
+      None
+    }
+
+    val check = if (needsNarrowing) checkNarrowing else None
+    if (check.isDefined) check
+    else {
+      //numeric widening
+      def checkWidening(l: ScType, r: ScType): Option[TypeResult[ScType]] = {
+        (l, r) match {
+          case (Byte, Short | Int | Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
+          case (Short, Int | Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
+          case (Char, Byte | Short | Int | Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
+          case (Int, Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
+          case (Long, Float | Double) => Some(Success(expected, Some(ScExpression.this)))
+          case (Float, Double) => Some(Success(expected, Some(ScExpression.this)))
+          case _ => None
+        }
+      }
+
+      def getValType: ScType => Option[ScType] = {
+        case AnyVal => Some(AnyVal)
+        case valType: ValType => Some(valType)
+        case designatorType: ScDesignatorType => designatorType.getValType
+        case _ => None
+      }
+
+      (getValType(tp), getValType(expected)) match {
+        case (Some(l), Some(r)) => checkWidening(l, r)
+        case _ => None
       }
     }
   }
@@ -236,97 +326,7 @@ trait ScExpression extends ScBlockStatement with PsiAnnotationMemberValue with I
         }
 
         val valType = res.inferValueType.unpackedType
-
-        if (ignoreBaseTypes) Success(valType, Some(ScExpression.this))
-        else {
-          expectedType(fromUnderscore) match {
-            case Some(expected) =>
-              //value discarding
-              if (expected.removeAbstracts equiv Unit) return Success(Unit, Some(ScExpression.this))
-              //numeric literal narrowing
-              val needsNarrowing = ScExpression.this match {
-                case _: ScLiteral => getNode.getFirstChildNode.getElementType == ScalaTokenTypes.tINTEGER
-                case p: ScPrefixExpr => p.operand match {
-                  case l: ScLiteral =>
-                    l.getNode.getFirstChildNode.getElementType == ScalaTokenTypes.tINTEGER &&
-                      Set("+", "-").contains(p.operation.getText)
-                  case _ => false
-                }
-                case _ => false
-              }
-
-              def checkNarrowing: Option[TypeResult[ScType]] = {
-                try {
-                  lazy val i = ScExpression.this match {
-                    case l: ScLiteral    => l.getValue match {
-                      case i: Integer => i.intValue
-                      case _          => scala.Int.MaxValue
-                    }
-                    case p: ScPrefixExpr =>
-                      val mult = if (p.operation.getText == "-") -1 else 1
-                      p.operand match {
-                        case l: ScLiteral => l.getValue match {
-                          case i: Integer => mult * i.intValue
-                          case _          => scala.Int.MaxValue
-                        }
-                      }
-                  }
-                  expected.removeAbstracts match {
-                    case api.Char =>
-                      if (i >= scala.Char.MinValue.toInt && i <= scala.Char.MaxValue.toInt) {
-                        return Some(Success(Char, Some(ScExpression.this)))
-                      }
-                    case api.Byte =>
-                      if (i >= scala.Byte.MinValue.toInt && i <= scala.Byte.MaxValue.toInt) {
-                        return Some(Success(Byte, Some(ScExpression.this)))
-                      }
-                    case api.Short =>
-                      if (i >= scala.Short.MinValue.toInt && i <= scala.Short.MaxValue.toInt) {
-                        return Some(Success(Short, Some(ScExpression.this)))
-                      }
-                    case _           =>
-                  }
-                }
-                catch {
-                  case _: NumberFormatException => //do nothing
-                }
-                None
-              }
-
-              val check = if (needsNarrowing) checkNarrowing else None
-              if (check.isDefined) check.get
-              else {
-                //numeric widening
-                def checkWidening(l: ScType, r: ScType): Option[TypeResult[ScType]] = {
-                  (l, r) match {
-                    case (Byte, Short | Int | Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-                    case (Short, Int | Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-                    case (Char, Byte | Short | Int | Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-                    case (Int, Long | Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-                    case (Long, Float | Double) => Some(Success(expected, Some(ScExpression.this)))
-                    case (Float, Double) => Some(Success(expected, Some(ScExpression.this)))
-                    case _ => None
-                  }
-                }
-
-                def getValType: ScType => Option[ScType] = {
-                  case AnyVal => Some(AnyVal)
-                  case valType: ValType => Some(valType)
-                  case designatorType: ScDesignatorType => designatorType.getValType
-                  case _ => None
-                }
-
-                (getValType(valType), getValType(expected)) match {
-                  case (Some(l), Some(r)) => checkWidening(l, r) match {
-                    case Some(x) => x
-                    case _ => Success(valType, Some(ScExpression.this))
-                  }
-                  case _ => Success(valType, Some(ScExpression.this))
-                }
-              }
-            case _ => Success(valType, Some(ScExpression.this))
-          }
-        }
+        Success(valType, Some(ScExpression.this))
       case _ => inner
     }
   }

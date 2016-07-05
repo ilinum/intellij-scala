@@ -9,14 +9,7 @@ import org.junit.experimental.categories.Category
   * @since 25.03.16.
   */
 @Category(Array(classOf[PerfCycleTests]))
-class PrimitivesConformanceTest extends TypeConformanceTestBase{
-  def test3074() = doTest(
-    """
-      |val a: Array[Byte] = Array(1, 2, 3)
-      |
-      |/* True */
-    """.stripMargin)
-
+class PrimitivesConformanceTest extends TypeConformanceTestBase {
   def testSCL5358() = doTest(
       """
         |final val x = 0
