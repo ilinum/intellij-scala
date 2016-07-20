@@ -9,14 +9,14 @@ import org.jetbrains.plugins.scala.lang.psi.api.toplevel.imports.usages.{ImportU
 import org.jetbrains.plugins.scala.util.ScalaLanguageDerivative
 
 /**
- * User: Alexander Podkhalyuzin
- * Date: 31.05.2010
- */
+  * User: Alexander Podkhalyuzin
+  * Date: 31.05.2010
+  */
 
 /**
- * See com.intellij.codeInsight.daemon.impl.RefCountHolder
- */
-class ScalaRefCountHolder private () {
+  * @see [[com.intellij.codeInsight.daemon.impl.analysis.RefCountHolder]]
+  */
+class ScalaRefCountHolder private() {
   private final val myState: AtomicReference[Integer] = new AtomicReference[Integer](State.VIRGIN)
   private object State {val VIRGIN = 0; val WRITE = 1; val READY = 2; val READ = 3;}
   private val myImportUsed = ContainerUtil.newConcurrentSet[ImportUsed]()
@@ -76,19 +76,18 @@ class ScalaRefCountHolder private () {
     }
   }
 
-  def analyze(analyze: Runnable, dirtyScope: TextRange, file: PsiFile): Boolean = {
+  def analyze(analyze: () => Unit, dirtyScope: Option[TextRange], file: PsiFile): Boolean = {
     myState.compareAndSet(State.READY, State.VIRGIN)
     if (!myState.compareAndSet(State.VIRGIN, State.WRITE)) return false
     try {
-      if (dirtyScope != null) {
-        if (dirtyScope.equals(file.getTextRange)) {
+      dirtyScope.foreach { scope =>
+        if (scope == file.getTextRange) {
           clear()
-        }
-        else {
+        } else {
           removeInvalidRefs()
         }
       }
-      analyze.run()
+      analyze()
     }
     finally {
       val set: Boolean = myState.compareAndSet(State.WRITE, State.READY)
@@ -129,7 +128,7 @@ object ScalaRefCountHolder {
   def getInstance(file: PsiFile): ScalaRefCountHolder = {
     val myFile = /*Option(file.getViewProvider getPsi ScalaFileType.SCALA_LANGUAGE) getOrElse file
     val file2 = */Option(ScalaLanguageDerivative getScalaFileOnDerivative file) getOrElse file
-    
+
     Option(myFile getUserData SCALA_REF_COUNT_HOLDER_IN_FILE_KEY) getOrElse {
       myFile.asInstanceOf[UserDataHolderEx] putUserDataIfAbsent (
         SCALA_REF_COUNT_HOLDER_IN_FILE_KEY, new ScalaRefCountHolder

@@ -18,17 +18,19 @@ class ScalaUnusedSymbolInspection extends HighlightingPassInspection {
   override def invoke(element: PsiElement): Seq[ProblemInfo] = element match {
     case declaredHolder: ScDeclaredElementsHolder if shouldProcessElement(element) =>
       declaredHolder.declaredElements.flatMap {
-        case named: ScNamedElement =>
-          val refCounter = ScalaRefCountHolder.getInstance(named.getContainingFile)
+        case named: ScNamedElement => named.containingScalaFile.fold[Seq[ProblemInfo]](Seq.empty) { file =>
+          LocalReferenceCounter.countReferences(file)
+          val refCounter = ScalaRefCountHolder.getInstance(file)
           var used = false
-          refCounter.retrieveUnusedReferencesInfo { () =>
+          val success = refCounter.retrieveUnusedReferencesInfo { () =>
             if (refCounter.isValueUsed(named)) {
               used = true
             }
           }
-          if (!used) {
+          if (!used && success) {
             Seq(ProblemInfo(named.nameId, ScalaUnusedSymbolInspection.Annotation, Seq(new DeleteUnusedElementFix(named))))
           } else Seq.empty
+        }
         case _ => Seq.empty
       }
     case _ => Seq.empty

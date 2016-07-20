@@ -4,7 +4,7 @@ package varCouldBeValInspection
 
 import com.intellij.psi.PsiElement
 import org.jetbrains.plugins.scala.annotator.importsTracker.ScalaRefCountHolder
-import org.jetbrains.plugins.scala.codeInspection.unusedInspections.{HighlightingPassInspection, ProblemInfo}
+import org.jetbrains.plugins.scala.codeInspection.unusedInspections.{HighlightingPassInspection, LocalReferenceCounter, ProblemInfo}
 import org.jetbrains.plugins.scala.lang.psi.ScalaPsiUtil
 import org.jetbrains.plugins.scala.lang.psi.api.statements.ScVariableDefinition
 
@@ -12,11 +12,12 @@ class VarCouldBeValInspection extends HighlightingPassInspection {
   override def isEnabledByDefault: Boolean = true
 
   override def invoke(element: PsiElement): Seq[ProblemInfo] = element match {
-    case varDef: ScVariableDefinition =>
+    case varDef: ScVariableDefinition => varDef.containingScalaFile.fold[Seq[ProblemInfo]](Seq.empty) { file =>
       var couldBeVal = true
       var used = false
+      LocalReferenceCounter.countReferences(file)
+      val holder = ScalaRefCountHolder.getInstance(file)
       varDef.declaredElements.foreach { elem =>
-        val holder = ScalaRefCountHolder.getInstance(element.getContainingFile)
         holder.retrieveUnusedReferencesInfo { () =>
           if (holder.isValueWriteUsed(elem)) {
             couldBeVal = false
@@ -29,6 +30,7 @@ class VarCouldBeValInspection extends HighlightingPassInspection {
       if (couldBeVal && used) {
         Seq(ProblemInfo(varDef.varKeyword, VarCouldBeValInspection.Annotation, Seq(new VarToValFix(varDef))))
       } else Seq.empty
+    }
     case _ => Seq.empty
   }
 

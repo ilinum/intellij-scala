@@ -41,13 +41,13 @@ class ScalaUnusedImportPass(val file: PsiFile, editor: Editor, val document: Doc
       highlightInfoProcessor) with ScalaUnusedImportPassBase {
   protected def getFixes: List[IntentionAction] = List(new ScalaOptimizeImportsFix, new ScalaEnableOptimizeImportsOnTheFlyFix)
 
-  private var myHighlights: util.List[HighlightInfo] = null
-  private var myOptimizeImportsRunnable: Runnable = null
+  private var myHighlights: util.List[HighlightInfo] = _
+  private var myOptimizeImportsRunnable: Runnable = _
 
   override def collectInformationWithProgress(progress: ProgressIndicator): Unit = {
     file match {
       case scalaFile: ScalaFile if HighlightingLevelManager.getInstance(file.getProject) shouldInspect file =>
-        val unusedImports: Array[ImportUsed] = ImportTracker getInstance file.getProject getUnusedImport scalaFile
+        val unusedImports: Array[ImportUsed] = ImportTracker getInstance file.getProject getUnusedImports scalaFile
         val annotations = collectAnnotations(unusedImports, new AnnotationHolderImpl(new AnnotationSession(file)))
 
         val list = new util.ArrayList[HighlightInfo](annotations.length)

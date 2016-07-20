@@ -3,6 +3,7 @@ package codeInspection
 package unusedInspections
 
 
+import com.intellij.codeHighlighting.TextEditorHighlightingPassRegistrar.Anchor
 import com.intellij.codeHighlighting._
 import com.intellij.codeInsight.daemon.impl.{DefaultHighlightInfoProcessor, FileStatusMap, HighlightInfoProcessor}
 import com.intellij.openapi.components.AbstractProjectComponent
@@ -17,11 +18,11 @@ import com.intellij.psi.PsiFile
  */
 class ScalaUnusedImportsPassFactory(project: Project, highlightingPassRegistrar: TextEditorHighlightingPassRegistrar)
         extends AbstractProjectComponent(project) with MainHighlightingPassFactory {
-  highlightingPassRegistrar.registerTextEditorHighlightingPass(this, Array[Int](Pass.UPDATE_ALL),
-    null, false, -1)
+  def registrar = TextEditorHighlightingPassRegistrar.getInstance(project)
+  val id = registrar.registerTextEditorHighlightingPass(this, Anchor.AFTER, LocalReferenceCountingPassFactory.instance(project).id, false, false)
 
   def createHighlightingPass(file: PsiFile, editor: Editor): TextEditorHighlightingPass = {
-    val textRange: TextRange = FileStatusMap.getDirtyTextRange(editor, Pass.UPDATE_ALL)
+    val textRange: TextRange = FileStatusMap.getDirtyTextRange(editor, Pass.LOCAL_INSPECTIONS)
     if (textRange == null && ScalaUnusedImportPass.isUpToDate(file)) return null
     create(file, editor.getDocument, editor, new DefaultHighlightInfoProcessor)
   }
